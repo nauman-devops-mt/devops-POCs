@@ -57,21 +57,29 @@ bump_from() {
   MAJOR=$(echo "$base" | cut -d. -f1)
   MINOR=$(echo "$base" | cut -d. -f2)
   PATCH=$(echo "$base" | cut -d. -f3)
-  BUMP="patch"
+  BUMP=""
 
-  while IFS= read -r line; do
-    if echo "$line" | grep -qiE "BREAKING[[:space:]]CHANGE"; then
-      BUMP="major"; break
-    fi
-    if echo "$line" | grep -qE "^[a-zA-Z]+(\(.+\))?!:"; then
-      BUMP="major"; break
-    fi
-    if echo "$line" | grep -qE "^feat(\(.+\))?:"; then
-      BUMP="minor"
-    fi
-  done <<< "$commits"
+  # Explicit override: #major / #minor / #patch anywhere in commit messages
+  if   echo "$commits" | grep -qE '(^|[[:space:]])#major([[:space:]]|$)'; then BUMP="major"
+  elif echo "$commits" | grep -qE '(^|[[:space:]])#minor([[:space:]]|$)'; then BUMP="minor"
+  elif echo "$commits" | grep -qE '(^|[[:space:]])#patch([[:space:]]|$)'; then BUMP="patch"
+  fi
 
-  echo "Bump level : $BUMP" >&2
+  # Fall back to conventional commits if no explicit override found
+  if [ -z "$BUMP" ]; then
+    BUMP="patch"
+    while IFS= read -r line; do
+      if echo "$line" | grep -qiE "BREAKING[[:space:]]CHANGE"; then
+        BUMP="major"; break
+      fi
+      if echo "$line" | grep -qE "^[a-zA-Z]+(\(.+\))?!:"; then
+        BUMP="major"; break
+      fi
+      if echo "$line" | grep -qE "^feat(\(.+\))?:"; then
+        BUMP="minor"
+      fi
+    done <<< "$commits"
+  fi
 
   case "$BUMP" in
     major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
@@ -79,7 +87,7 @@ bump_from() {
     patch) PATCH=$((PATCH+1)) ;;
   esac
 
-  echo "${MAJOR}.${MINOR}.${PATCH}"
+  echo "${BUMP}:${MAJOR}.${MINOR}.${PATCH}"
 }
 
 # ── Gather latest tag for each environment ────────────────────────────────────
@@ -97,7 +105,7 @@ echo "mainnet latest : ${LATEST_MAINNET_TAG:-none} → base $MAINNET_BASE" >&2
 echo "---" >&2
 
 # ── Branch-specific logic ─────────────────────────────────────────────────────
-BUMP="patch"
+BUMP=""
 NEW_TAG=""
 
 case "$BRANCH" in
@@ -123,7 +131,7 @@ case "$BRANCH" in
       exit 0
     fi
 
-    NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
+    _result=$(bump_from "$FROM_BASE" "$COMMITS"); BUMP="${_result%%:*}"; NEW_BASE="${_result#*:}"
     NEW_TAG="devnet-v${NEW_BASE}"
     ;;
 
@@ -153,7 +161,7 @@ case "$BRANCH" in
         exit 0
       fi
 
-      NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
+      _result=$(bump_from "$FROM_BASE" "$COMMITS"); BUMP="${_result%%:*}"; NEW_BASE="${_result#*:}"
       NEW_TAG="testnet-v${NEW_BASE}"
     fi
     ;;
@@ -182,7 +190,7 @@ case "$BRANCH" in
         exit 0
       fi
 
-      NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
+      _result=$(bump_from "$FROM_BASE" "$COMMITS"); BUMP="${_result%%:*}"; NEW_BASE="${_result#*:}"
       NEW_TAG="v${NEW_BASE}"
     fi
     ;;
