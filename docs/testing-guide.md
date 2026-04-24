@@ -4,9 +4,9 @@
 
 ## How It Works (Quick Summary)
 
-- Push to any branch → workflow runs
-- Tag is **only created** if a commit message contains `#patch`, `#minor`, or `#major`
-- No keyword → no tag, workflow exits cleanly
+- Push or merge to any branch → workflow runs
+- Tag is **only created** if `#patch`, `#minor`, or `#major` appears in **any commit since the last tag** — including commits from a merged feature branch, not just the merge commit itself
+- No keyword anywhere → no tag, workflow exits cleanly
 - Merging devnet → testnet or testnet → mainnet **automatically inherits** the version (no keyword needed)
 
 ---
@@ -188,6 +188,52 @@ Expected:
 ```
 Tag devnet-v1.0.1 already exists — nothing to do.
 ```
+
+---
+
+### Test 9 — Merge feature branch into devnet, keyword on feature branch
+
+```bash
+git tag devnet-v1.0.0                                   # mark current point as last release
+git checkout -b feature/my-feature
+git commit --allow-empty -m 'wip: working on feature'
+git commit --allow-empty -m 'done: add new endpoint #minor'
+git checkout devnet
+git merge feature/my-feature --no-edit
+./scripts/bump-version.sh --branch devnet --dry-run
+git tag -d devnet-v1.0.0
+git branch -d feature/my-feature
+```
+
+Expected:
+```
+New tag : devnet-v1.1.0  (bump: minor)
+```
+
+The merge commit itself (`Merge branch 'feature/my-feature' into devnet`) has no keyword — but the workflow scans all commits since the last devnet tag, so `#minor` on the feature branch commit is picked up.
+
+---
+
+### Test 10 — Merge feature branch into devnet, no keyword anywhere
+
+```bash
+git tag devnet-v1.0.0                                   # mark current point as last release
+git checkout -b feature/my-feature
+git commit --allow-empty -m 'wip: working on feature'
+git commit --allow-empty -m 'done: add new endpoint'
+git checkout devnet
+git merge feature/my-feature --no-edit
+./scripts/bump-version.sh --branch devnet --dry-run
+git tag -d devnet-v1.0.0
+git branch -d feature/my-feature
+```
+
+Expected:
+```
+No #major/#minor/#patch found — skipping.
+```
+
+No keyword in any commit (merge commit or feature branch) → no tag created.
 
 ---
 
