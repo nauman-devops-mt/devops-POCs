@@ -1,0 +1,31 @@
+name: Require Version Label
+
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
+    branches:
+      - devnet
+
+jobs:
+  check-label:
+    name: Check version label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify patch / minor / major label is set
+        shell: bash
+        run: |
+          LABELS="${{ join(github.event.pull_request.labels.*.name, ' ') }}"
+          echo "Labels on this PR: ${LABELS:-none}"
+
+          if echo "$LABELS" | grep -qwE "patch|minor|major"; then
+            echo "✓ Version label found — OK to merge."
+          else
+            echo ""
+            echo "✗ Missing version label."
+            echo ""
+            echo "Add one of the following labels to this PR before merging:"
+            echo "  patch  — bug fixes, small changes  (v1.2.3 → v1.2.4)"
+            echo "  minor  — new features               (v1.2.3 → v1.3.0)"
+            echo "  major  — breaking changes           (v1.2.3 → v2.0.0)"
+            exit 1
+          fi
