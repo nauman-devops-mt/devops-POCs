@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
-# Promotion-aware semantic version bump script.
-# Mirrors the logic in .github/workflows/auto-tag.yml for local use.
+# Local version bump script — mirrors the PR-label logic in auto-tag.yml.
 #
-# Conventional commit rules:
-#   BREAKING CHANGE (in footer) or "!:" in type → major bump
-#   feat:  → minor bump
-#   anything else → patch bump (default)
+# Usage:
+#   ./scripts/bump-version.sh --branch devnet  --bump minor [--dry-run]
+#   ./scripts/bump-version.sh --branch testnet [--dry-run]   # promotion only
+#   ./scripts/bump-version.sh --branch mainnet [--dry-run]   # promotion only
 #
-# Promotion rules:
-#   testnet branch: if latest devnet tag is ahead → inherit devnet version
-#   mainnet branch: if latest testnet tag is ahead → inherit testnet version
-#
-# Usage: ./scripts/bump-version.sh [--branch <devnet|testnet|mainnet>] [--dry-run]
+# --branch   Target branch: devnet | testnet | mainnet (default: current branch)
+# --bump     Required for devnet: patch | minor | major
+# --dry-run  Print next tag without creating or pushing it
 
 set -euo pipefail
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 DRY_RUN=false
 BRANCH=""
+BUMP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run)         DRY_RUN=true; shift ;;
-    --branch)          BRANCH="$2"; shift 2 ;;
-    *)                 echo "Unknown argument: $1" >&2; exit 1 ;;
+    --dry-run) DRY_RUN=true;  shift ;;
+    --branch)  BRANCH="$2";   shift 2 ;;
+    --bump)    BUMP="$2";     shift 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
@@ -36,7 +35,19 @@ if [[ "$BRANCH" != "devnet" && "$BRANCH" != "testnet" && "$BRANCH" != "mainnet" 
   exit 1
 fi
 
+if [[ "$BRANCH" == "devnet" ]]; then
+  if [[ -z "$BUMP" ]]; then
+    echo "Error: --bump patch|minor|major is required for devnet" >&2
+    exit 1
+  fi
+  if [[ "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
+    echo "Error: --bump must be patch, minor, or major (got: '$BUMP')" >&2
+    exit 1
+  fi
+fi
+
 echo "Branch : $BRANCH" >&2
+[[ -n "$BUMP" ]] && echo "Bump   : $BUMP" >&2
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,38 +59,6 @@ version_gt() {
 
 get_base() {
   echo "$1" | sed -E 's/^(devnet-v|testnet-v|v)//'
-}
-
-bump_from() {
-  local base="$1" commits="$2"
-  local MAJOR MINOR PATCH BUMP
-
-  MAJOR=$(echo "$base" | cut -d. -f1)
-  MINOR=$(echo "$base" | cut -d. -f2)
-  PATCH=$(echo "$base" | cut -d. -f3)
-  BUMP="patch"
-
-  while IFS= read -r line; do
-    if echo "$line" | grep -qiE "BREAKING[[:space:]]CHANGE"; then
-      BUMP="major"; break
-    fi
-    if echo "$line" | grep -qE "^[a-zA-Z]+(\(.+\))?!:"; then
-      BUMP="major"; break
-    fi
-    if echo "$line" | grep -qE "^feat(\(.+\))?:"; then
-      BUMP="minor"
-    fi
-  done <<< "$commits"
-
-  echo "Bump level : $BUMP" >&2
-
-  case "$BUMP" in
-    major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
-    minor) MINOR=$((MINOR+1)); PATCH=0 ;;
-    patch) PATCH=$((PATCH+1)) ;;
-  esac
-
-  echo "${MAJOR}.${MINOR}.${PATCH}"
 }
 
 # ── Gather latest tag for each environment ────────────────────────────────────
@@ -97,34 +76,27 @@ echo "mainnet latest : ${LATEST_MAINNET_TAG:-none} → base $MAINNET_BASE" >&2
 echo "---" >&2
 
 # ── Branch-specific logic ─────────────────────────────────────────────────────
-BUMP="patch"
 NEW_TAG=""
 
 case "$BRANCH" in
 
   devnet)
-    if [ -n "$LATEST_DEVNET_TAG" ]; then
-      FROM_REF="$LATEST_DEVNET_TAG";  FROM_BASE="$DEVNET_BASE"
-    elif [ -n "$LATEST_MAINNET_TAG" ]; then
-      FROM_REF="$LATEST_MAINNET_TAG"; FROM_BASE="$MAINNET_BASE"
-    else
-      FROM_REF=""; FROM_BASE="0.0.0"
+    if [ -n "$LATEST_DEVNET_TAG" ]; then FROM_BASE="$DEVNET_BASE"
+    elif [ -n "$LATEST_MAINNET_TAG" ]; then FROM_BASE="$MAINNET_BASE"
+    else FROM_BASE="0.0.0"
     fi
 
-    if [ -n "$FROM_REF" ]; then
-      COMMITS=$(git log "${FROM_REF}..HEAD" --pretty=format:"%s%n%b")
-    else
-      COMMITS=$(git log --pretty=format:"%s%n%b")
-    fi
+    MAJOR=$(echo "$FROM_BASE" | cut -d. -f1)
+    MINOR=$(echo "$FROM_BASE" | cut -d. -f2)
+    PATCH=$(echo "$FROM_BASE" | cut -d. -f3)
 
-    if [ -z "$COMMITS" ]; then
-      echo "No new commits since ${FROM_REF:-start} — nothing to do." >&2
-      echo "${LATEST_DEVNET_TAG:-devnet-v0.0.0}"
-      exit 0
-    fi
+    case "$BUMP" in
+      major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+      minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+      patch) PATCH=$((PATCH+1)) ;;
+    esac
 
-    NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
-    NEW_TAG="devnet-v${NEW_BASE}"
+    NEW_TAG="devnet-v${MAJOR}.${MINOR}.${PATCH}"
     ;;
 
   testnet)
@@ -133,28 +105,9 @@ case "$BRANCH" in
       NEW_TAG="testnet-v${DEVNET_BASE}"
       BUMP="promotion"
     else
-      if [ -n "$LATEST_TESTNET_TAG" ]; then
-        FROM_REF="$LATEST_TESTNET_TAG";  FROM_BASE="$TESTNET_BASE"
-      elif [ -n "$LATEST_MAINNET_TAG" ]; then
-        FROM_REF="$LATEST_MAINNET_TAG"; FROM_BASE="$MAINNET_BASE"
-      else
-        FROM_REF=""; FROM_BASE="0.0.0"
-      fi
-
-      if [ -n "$FROM_REF" ]; then
-        COMMITS=$(git log "${FROM_REF}..HEAD" --pretty=format:"%s%n%b")
-      else
-        COMMITS=$(git log --pretty=format:"%s%n%b")
-      fi
-
-      if [ -z "$COMMITS" ]; then
-        echo "No new commits since ${FROM_REF:-start} — nothing to do." >&2
-        echo "${LATEST_TESTNET_TAG:-testnet-v0.0.0}"
-        exit 0
-      fi
-
-      NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
-      NEW_TAG="testnet-v${NEW_BASE}"
+      echo "testnet is already up to date with devnet — nothing to do." >&2
+      echo "${LATEST_TESTNET_TAG:-testnet-v0.0.0}"
+      exit 0
     fi
     ;;
 
@@ -164,26 +117,9 @@ case "$BRANCH" in
       NEW_TAG="v${TESTNET_BASE}"
       BUMP="promotion"
     else
-      if [ -n "$LATEST_MAINNET_TAG" ]; then
-        FROM_REF="$LATEST_MAINNET_TAG"; FROM_BASE="$MAINNET_BASE"
-      else
-        FROM_REF=""; FROM_BASE="0.0.0"
-      fi
-
-      if [ -n "$FROM_REF" ]; then
-        COMMITS=$(git log "${FROM_REF}..HEAD" --pretty=format:"%s%n%b")
-      else
-        COMMITS=$(git log --pretty=format:"%s%n%b")
-      fi
-
-      if [ -z "$COMMITS" ]; then
-        echo "No new commits since ${FROM_REF:-start} — nothing to do." >&2
-        echo "${LATEST_MAINNET_TAG:-v0.0.0}"
-        exit 0
-      fi
-
-      NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
-      NEW_TAG="v${NEW_BASE}"
+      echo "mainnet is already up to date with testnet — nothing to do." >&2
+      echo "${LATEST_MAINNET_TAG:-v0.0.0}"
+      exit 0
     fi
     ;;
 esac
