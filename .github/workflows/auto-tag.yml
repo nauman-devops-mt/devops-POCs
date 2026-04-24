@@ -1,7 +1,8 @@
 name: Semantic Auto-Tag
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - devnet
       - testnet
@@ -14,6 +15,7 @@ jobs:
   tag:
     name: Bump & Tag
     runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
 
     steps:
       - name: Checkout (full history + tags)
@@ -32,52 +34,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BRANCH="${{ github.ref_name }}"
+          BRANCH="${{ github.base_ref }}"
+          PR_LABELS="${{ join(github.event.pull_request.labels.*.name, ' ') }}"
+
+          echo "Branch   : $BRANCH"
+          echo "PR labels: ${PR_LABELS:-none}"
 
           # ── Helpers ─────────────────────────────────────────────────────────
 
-          # Returns 0 (true) if semver A is strictly greater than B
           version_gt() {
             local sorted_max
             sorted_max=$(printf '%s\n' "$1" "$2" | sort -V | tail -1)
             [[ "$sorted_max" == "$1" && "$1" != "$2" ]]
           }
 
-          # Strip env prefix and leading v to get bare X.Y.Z
           get_base() {
             echo "$1" | sed -E 's/^(devnet-v|testnet-v|v)//'
-          }
-
-          # Apply conventional-commit bump rules to a base version X.Y.Z
-          # Reads commits text from second arg; echoes new X.Y.Z to stdout
-          bump_from() {
-            local base="$1" commits="$2"
-            local MAJOR MINOR PATCH BUMP
-
-            MAJOR=$(echo "$base" | cut -d. -f1)
-            MINOR=$(echo "$base" | cut -d. -f2)
-            PATCH=$(echo "$base" | cut -d. -f3)
-            BUMP="patch"
-
-            while IFS= read -r line; do
-              if echo "$line" | grep -qiE "BREAKING[[:space:]]CHANGE"; then
-                BUMP="major"; break
-              fi
-              if echo "$line" | grep -qE "^[a-zA-Z]+(\(.+\))?!:"; then
-                BUMP="major"; break
-              fi
-              if echo "$line" | grep -qE "^feat(\(.+\))?:"; then
-                BUMP="minor"
-              fi
-            done <<< "$commits"
-
-            case "$BUMP" in
-              major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
-              minor) MINOR=$((MINOR+1)); PATCH=0 ;;
-              patch) PATCH=$((PATCH+1)) ;;
-            esac
-
-            echo "${MAJOR}.${MINOR}.${PATCH}"
           }
 
           # ── Gather latest tag for each environment ───────────────────────────
@@ -94,96 +66,60 @@ jobs:
           echo "mainnet latest : ${LATEST_MAINNET_TAG:-none} → base $MAINNET_BASE"
           echo "---"
 
-          # ── Branch-specific version logic ────────────────────────────────────
-          BUMP="patch"
+          BUMP=""
           NEW_TAG=""
 
           case "$BRANCH" in
 
             devnet)
-              # devnet always derives its version from conventional commits
-              if [ -n "$LATEST_DEVNET_TAG" ]; then
-                FROM_REF="$LATEST_DEVNET_TAG";  FROM_BASE="$DEVNET_BASE"
-              elif [ -n "$LATEST_MAINNET_TAG" ]; then
-                FROM_REF="$LATEST_MAINNET_TAG"; FROM_BASE="$MAINNET_BASE"
+              # Label drives the version bump
+              if   echo "$PR_LABELS" | grep -qw "major"; then BUMP="major"
+              elif echo "$PR_LABELS" | grep -qw "minor"; then BUMP="minor"
+              elif echo "$PR_LABELS" | grep -qw "patch"; then BUMP="patch"
               else
-                FROM_REF=""; FROM_BASE="0.0.0"
-              fi
-
-              if [ -n "$FROM_REF" ]; then
-                COMMITS=$(git log "${FROM_REF}..HEAD" --pretty=format:"%s%n%b")
-              else
-                COMMITS=$(git log --pretty=format:"%s%n%b")
-              fi
-
-              if [ -z "$COMMITS" ]; then
-                echo "No new commits since ${FROM_REF:-start} — skipping."
+                echo "No patch/minor/major label — skipping."
                 echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
 
-              NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
-              NEW_TAG="devnet-v${NEW_BASE}"
+              if [ -n "$LATEST_DEVNET_TAG" ]; then FROM_BASE="$DEVNET_BASE"
+              elif [ -n "$LATEST_MAINNET_TAG" ]; then FROM_BASE="$MAINNET_BASE"
+              else FROM_BASE="0.0.0"
+              fi
+
+              MAJOR=$(echo "$FROM_BASE" | cut -d. -f1)
+              MINOR=$(echo "$FROM_BASE" | cut -d. -f2)
+              PATCH=$(echo "$FROM_BASE" | cut -d. -f3)
+
+              case "$BUMP" in
+                major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+                minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+                patch) PATCH=$((PATCH+1)) ;;
+              esac
+
+              NEW_TAG="devnet-v${MAJOR}.${MINOR}.${PATCH}"
               ;;
 
             testnet)
+              # Always a promotion from devnet — no label needed
               if version_gt "$DEVNET_BASE" "$TESTNET_BASE"; then
-                # Promotion from devnet: inherit its version
                 echo "Promotion: devnet $DEVNET_BASE > testnet $TESTNET_BASE"
                 NEW_TAG="testnet-v${DEVNET_BASE}"
                 BUMP="promotion"
               else
-                # Direct push / hotfix straight to testnet
-                if [ -n "$LATEST_TESTNET_TAG" ]; then
-                  FROM_REF="$LATEST_TESTNET_TAG";  FROM_BASE="$TESTNET_BASE"
-                elif [ -n "$LATEST_MAINNET_TAG" ]; then
-                  FROM_REF="$LATEST_MAINNET_TAG"; FROM_BASE="$MAINNET_BASE"
-                else
-                  FROM_REF=""; FROM_BASE="0.0.0"
-                fi
-
-                if [ -n "$FROM_REF" ]; then
-                  COMMITS=$(git log "${FROM_REF}..HEAD" --pretty=format:"%s%n%b")
-                else
-                  COMMITS=$(git log --pretty=format:"%s%n%b")
-                fi
-
-                if [ -z "$COMMITS" ]; then
-                  echo "No new commits since ${FROM_REF:-start} — skipping."
-                  echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
-                fi
-
-                NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
-                NEW_TAG="testnet-v${NEW_BASE}"
+                echo "testnet is already up to date with devnet — skipping."
+                echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
               ;;
 
             mainnet)
+              # Always a promotion from testnet — no label needed
               if version_gt "$TESTNET_BASE" "$MAINNET_BASE"; then
-                # Promotion from testnet: inherit its version
                 echo "Promotion: testnet $TESTNET_BASE > mainnet $MAINNET_BASE"
                 NEW_TAG="v${TESTNET_BASE}"
                 BUMP="promotion"
               else
-                # Direct push / hotfix straight to mainnet
-                if [ -n "$LATEST_MAINNET_TAG" ]; then
-                  FROM_REF="$LATEST_MAINNET_TAG"; FROM_BASE="$MAINNET_BASE"
-                else
-                  FROM_REF=""; FROM_BASE="0.0.0"
-                fi
-
-                if [ -n "$FROM_REF" ]; then
-                  COMMITS=$(git log "${FROM_REF}..HEAD" --pretty=format:"%s%n%b")
-                else
-                  COMMITS=$(git log --pretty=format:"%s%n%b")
-                fi
-
-                if [ -z "$COMMITS" ]; then
-                  echo "No new commits since ${FROM_REF:-start} — skipping."
-                  echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
-                fi
-
-                NEW_BASE=$(bump_from "$FROM_BASE" "$COMMITS")
-                NEW_TAG="v${NEW_BASE}"
+                echo "mainnet is already up to date with testnet — skipping."
+                echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
               fi
               ;;
           esac
@@ -209,7 +145,7 @@ jobs:
           echo "Tagged and pushed: $NEW_TAG"
 
       - name: Create GitHub Release
-        if: steps.version.outputs.skip != 'true' && github.ref_name == 'mainnet'
+        if: steps.version.outputs.skip != 'true' && github.base_ref == 'mainnet'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.new_tag }}
