@@ -1,4 +1,4 @@
-FROM alpine:3.19
+FROM invalid-image-that-does-not-exist:999
 
 LABEL maintainer="nauman-devops-mt"
 LABEL org.opencontainers.image.source="https://github.com/nauman-devops-mt/devops-POCs"
