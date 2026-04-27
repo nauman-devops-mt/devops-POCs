@@ -9,8 +9,7 @@ on:
       - mainnet
 
 env:
-  DOCKERHUB_IMAGE: naumandevopsmt/devops-poc # user/reponame
-
+  DOCKERHUB_IMAGE: naumandevopsmt/devops-poc
 permissions:
   contents: write
 
@@ -190,70 +189,43 @@ jobs:
           generate_release_notes: true
 
       # ── Slack Notifications ──────────────────────────────────────────────────
-      - name: Notify Slack — Success
+      - name: Notify Slack (Success)
         if: success() && steps.version.outputs.skip != 'true'
-        uses: slackapi/slack-github-action@v1.27.0
-        with:
-          payload: |
-            {
-              "text": "✅ *${{ steps.version.outputs.new_tag }}* tagged and pushed to DockerHub",
-              "attachments": [
-                {
-                  "color": "good",
-                  "fields": [
-                    { "title": "Branch",       "value": "${{ github.base_ref }}",                        "short": true  },
-                    { "title": "Tag",          "value": "${{ steps.version.outputs.new_tag }}",           "short": true  },
-                    { "title": "Bump",         "value": "${{ steps.version.outputs.bump }}",              "short": true  },
-                    { "title": "Docker Image", "value": "${{ steps.version.outputs.image_tags }}",        "short": false },
-                    { "title": "PR",           "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>", "short": true }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \"🚀 <!channel> *Deployment Successful*\n\n\
+            🧾 *Repo:* ${{ github.repository }}\n\
+            🏷️ *Git Tag:* ${{ steps.version.outputs.new_tag }}\n\
+            🐳 *Docker Image:* ${{ steps.version.outputs.image_tags }}\n\
+            🌿 *Branch:* ${{ github.base_ref }}\n\
+            👤 *Triggered by:* ${{ github.actor }}\n\
+            🔗 *Docker Hub:* https://hub.docker.com/r/${{ env.DOCKERHUB_IMAGE }}\"
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      - name: Notify Slack — Skipped
+      - name: Notify Slack (Skipped)
         if: steps.version.outputs.skip == 'true'
-        uses: slackapi/slack-github-action@v1.27.0
-        with:
-          payload: |
-            {
-              "text": "⏭️ Tagging skipped for PR *#${{ github.event.pull_request.number }}* → *${{ github.base_ref }}*",
-              "attachments": [
-                {
-                  "color": "warning",
-                  "fields": [
-                    { "title": "Branch", "value": "${{ github.base_ref }}",                                                                     "short": true  },
-                    { "title": "PR",     "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>",        "short": true  },
-                    { "title": "Reason", "value": "No version label set or branch already up to date",                                          "short": false }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \"⏭️ <!channel> *Deployment Skipped*\n\n\
+            🧾 *Repo:* ${{ github.repository }}\n\
+            🌿 *Branch:* ${{ github.base_ref }}\n\
+            👤 *Triggered by:* ${{ github.actor }}\n\
+            ⚠️ *Reason:* No patch/minor/major label or branch already up to date\"
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      - name: Notify Slack — Failure
+      - name: Notify Slack (Failure)
         if: failure()
-        uses: slackapi/slack-github-action@v1.27.0
-        with:
-          payload: |
-            {
-              "text": "❌ Build failed for PR *#${{ github.event.pull_request.number }}* → *${{ github.base_ref }}*",
-              "attachments": [
-                {
-                  "color": "danger",
-                  "fields": [
-                    { "title": "Branch",       "value": "${{ github.base_ref }}",                                                                      "short": true  },
-                    { "title": "PR",           "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>",         "short": true  },
-                    { "title": "Workflow Run", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>", "short": false }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{
+            \"text\": \"❌ <!channel> *Deployment Failed*\n\n\
+            🧾 *Repo:* ${{ github.repository }}\n\
+            🌿 *Branch:* ${{ github.base_ref }}\n\
+            👤 *Triggered by:* ${{ github.actor }}\n\
+            🔗 *Logs:* https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
