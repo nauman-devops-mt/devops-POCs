@@ -1,4 +1,4 @@
-name: Semantic Auto-Tag
+name: Tag & Docker Build & Push
 
 on:
   pull_request:
@@ -12,8 +12,8 @@ permissions:
   contents: write
 
 jobs:
-  tag:
-    name: Bump & Tag
+  tag-and-publish:
+    name: Tag, Build & Push
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
 
@@ -29,6 +29,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # ── Step 1: Compute next version ────────────────────────────────────────
       - name: Compute next version
         id: version
         shell: bash
@@ -36,11 +37,10 @@ jobs:
           set -euo pipefail
           BRANCH="${{ github.base_ref }}"
           PR_LABELS="${{ join(github.event.pull_request.labels.*.name, ' ') }}"
+          IMAGE="nauman-devops-mt/devops-pocs"
 
           echo "Branch   : $BRANCH"
           echo "PR labels: ${PR_LABELS:-none}"
-
-          # ── Helpers ─────────────────────────────────────────────────────────
 
           version_gt() {
             local sorted_max
@@ -52,7 +52,6 @@ jobs:
             echo "$1" | sed -E 's/^(devnet-v|testnet-v|v)//'
           }
 
-          # ── Gather latest tag for each environment ───────────────────────────
           LATEST_DEVNET_TAG=$( git tag --list 'devnet-v*'              | sort -V | tail -1)
           LATEST_TESTNET_TAG=$(git tag --list 'testnet-v*'             | sort -V | tail -1)
           LATEST_MAINNET_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
@@ -70,9 +69,7 @@ jobs:
           NEW_TAG=""
 
           case "$BRANCH" in
-
             devnet)
-              # Label drives the version bump
               if   echo "$PR_LABELS" | grep -qw "major"; then BUMP="major"
               elif echo "$PR_LABELS" | grep -qw "minor"; then BUMP="minor"
               elif echo "$PR_LABELS" | grep -qw "patch"; then BUMP="patch"
@@ -100,7 +97,6 @@ jobs:
               ;;
 
             testnet)
-              # Always a promotion from devnet — no label needed
               if version_gt "$DEVNET_BASE" "$TESTNET_BASE"; then
                 echo "Promotion: devnet $DEVNET_BASE > testnet $TESTNET_BASE"
                 NEW_TAG="testnet-v${DEVNET_BASE}"
@@ -112,7 +108,6 @@ jobs:
               ;;
 
             mainnet)
-              # Always a promotion from testnet — no label needed
               if version_gt "$TESTNET_BASE" "$MAINNET_BASE"; then
                 echo "Promotion: testnet $TESTNET_BASE > mainnet $MAINNET_BASE"
                 NEW_TAG="v${TESTNET_BASE}"
@@ -124,26 +119,65 @@ jobs:
               ;;
           esac
 
-          # ── Idempotency: skip if tag already exists ──────────────────────────
           if git rev-parse -q --verify "refs/tags/${NEW_TAG}" > /dev/null 2>&1; then
             echo "Tag $NEW_TAG already exists — skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
 
-          echo "New tag : $NEW_TAG  (bump: $BUMP)"
-          echo "skip=false"       >> "$GITHUB_OUTPUT"
-          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
-          echo "bump=$BUMP"       >> "$GITHUB_OUTPUT"
+          # Compute DockerHub image tags
+          IMAGE_TAGS="${IMAGE}:${NEW_TAG}"
+          if [[ "$NEW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            IMAGE_TAGS="${IMAGE_TAGS},${IMAGE}:latest"
+          fi
 
-      - name: Create annotated tag
+          echo "New tag    : $NEW_TAG  (bump: $BUMP)"
+          echo "Image tags : $IMAGE_TAGS"
+
+          echo "skip=false"           >> "$GITHUB_OUTPUT"
+          echo "new_tag=$NEW_TAG"     >> "$GITHUB_OUTPUT"
+          echo "bump=$BUMP"           >> "$GITHUB_OUTPUT"
+          echo "image_tags=$IMAGE_TAGS" >> "$GITHUB_OUTPUT"
+
+      # ── Step 2: Login to DockerHub ───────────────────────────────────────────
+      - name: Login to DockerHub
+        if: steps.version.outputs.skip != 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Step 3: Build Docker image (no push yet) ─────────────────────────────
+      - name: Build Docker image
+        if: steps.version.outputs.skip != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ steps.version.outputs.image_tags }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.new_tag }}
+
+      # ── Step 4: Create git tag (only if build succeeded) ────────────────────
+      - name: Create git tag
         if: steps.version.outputs.skip != 'true'
         run: |
           NEW_TAG="${{ steps.version.outputs.new_tag }}"
           git tag -a "$NEW_TAG" \
             -m "Release $NEW_TAG (bump: ${{ steps.version.outputs.bump }})"
           git push origin "$NEW_TAG"
-          echo "Tagged and pushed: $NEW_TAG"
+          echo "Git tag pushed: $NEW_TAG"
 
+      # ── Step 5: Push Docker image (only if git tag succeeded) ───────────────
+      - name: Push Docker image to DockerHub
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          echo "${{ steps.version.outputs.image_tags }}" | tr ',' '\n' | while read tag; do
+            echo "Pushing $tag ..."
+            docker push "$tag"
+          done
+
+      # ── Step 6: Create GitHub Release (mainnet only) ────────────────────────
       - name: Create GitHub Release
         if: steps.version.outputs.skip != 'true' && github.base_ref == 'mainnet'
         uses: softprops/action-gh-release@v2
