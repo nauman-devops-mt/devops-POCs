@@ -9,7 +9,7 @@ on:
       - mainnet
 
 env:
-  DOCKERHUB_IMAGE: naumandevopsmt/devops-pocs
+  DOCKERHUB_IMAGE: naumandevopsmt/devops-poc
 
 permissions:
   contents: write
