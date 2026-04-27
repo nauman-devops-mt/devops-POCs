@@ -188,3 +188,72 @@ jobs:
           tag_name: ${{ steps.version.outputs.new_tag }}
           name: "Release ${{ steps.version.outputs.new_tag }}"
           generate_release_notes: true
+
+      # ── Slack Notifications ──────────────────────────────────────────────────
+      - name: Notify Slack — Success
+        if: success() && steps.version.outputs.skip != 'true'
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "✅ *${{ steps.version.outputs.new_tag }}* tagged and pushed to DockerHub",
+              "attachments": [
+                {
+                  "color": "good",
+                  "fields": [
+                    { "title": "Branch",       "value": "${{ github.base_ref }}",                        "short": true  },
+                    { "title": "Tag",          "value": "${{ steps.version.outputs.new_tag }}",           "short": true  },
+                    { "title": "Bump",         "value": "${{ steps.version.outputs.bump }}",              "short": true  },
+                    { "title": "Docker Image", "value": "${{ steps.version.outputs.image_tags }}",        "short": false },
+                    { "title": "PR",           "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>", "short": true }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — Skipped
+        if: steps.version.outputs.skip == 'true'
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "⏭️ Tagging skipped for PR *#${{ github.event.pull_request.number }}* → *${{ github.base_ref }}*",
+              "attachments": [
+                {
+                  "color": "warning",
+                  "fields": [
+                    { "title": "Branch", "value": "${{ github.base_ref }}",                                                                     "short": true  },
+                    { "title": "PR",     "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>",        "short": true  },
+                    { "title": "Reason", "value": "No version label set or branch already up to date",                                          "short": false }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack — Failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "❌ Build failed for PR *#${{ github.event.pull_request.number }}* → *${{ github.base_ref }}*",
+              "attachments": [
+                {
+                  "color": "danger",
+                  "fields": [
+                    { "title": "Branch",       "value": "${{ github.base_ref }}",                                                                      "short": true  },
+                    { "title": "PR",           "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>",         "short": true  },
+                    { "title": "Workflow Run", "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>", "short": false }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
