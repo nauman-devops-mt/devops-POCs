@@ -9,7 +9,7 @@ on:
       - mainnet
 
 env:
-  DOCKERHUB_IMAGE: naumandevopsmt/devops-poc
+  DOCKERHUB_IMAGE: naumandevopsmt/devops-poc # user/reponame
 
 permissions:
   contents: write
