@@ -1,0 +1,34 @@
+name: Require Source Branch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - testnet
+      - mainnet
+
+jobs:
+  check-source:
+    name: Check source branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce promotion order
+        run: |
+          HEAD="${{ github.head_ref }}"
+          BASE="${{ github.base_ref }}"
+
+          echo "PR from: $HEAD → $BASE"
+
+          if [ "$BASE" = "testnet" ] && [ "$HEAD" != "devnet" ]; then
+            echo "❌ PRs to testnet must come from devnet (got: $HEAD)"
+            echo "Merge order: feature → devnet → testnet → mainnet"
+            exit 1
+          fi
+
+          if [ "$BASE" = "mainnet" ] && [ "$HEAD" != "testnet" ]; then
+            echo "❌ PRs to mainnet must come from testnet (got: $HEAD)"
+            echo "Merge order: feature → devnet → testnet → mainnet"
+            exit 1
+          fi
+
+          echo "✓ Source branch is correct ($HEAD → $BASE)"
