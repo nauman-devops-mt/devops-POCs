@@ -14,7 +14,7 @@ permissions:
   contents: write 
 
 jobs:
-  tag-and-publish:
+  tag-and-publish: 
     name: Tag, Build & Push
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
